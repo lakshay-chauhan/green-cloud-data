@@ -25,7 +25,7 @@ WUE = 1.8       # ml/Wh (Water Usage Effectiveness)
 
 API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel("gemini-2.5-pro")
+model = genai.GenerativeModel("gemma-3-4b-it")
 
 class CodePayload(BaseModel):
     code: str
