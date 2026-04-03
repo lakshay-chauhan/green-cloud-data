@@ -6,8 +6,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="Gemini Physics-Based Analyzer")
+app = FastAPI()
 
+# ✅ FIX: CORS Policy
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,15 +17,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Constants for Physics Derivations
-KAPPA = 0.8e-9  # Joules per CPU cycle
-MU = 1.2e-9     # Joules per Byte-access
-CI_INDIA = 710  # gCO2e/kWh (India Avg)
-WUE = 1.8       # Liters/kWh (Water Usage Effectiveness)
+# Physics Constants
+KAPPA = 0.8e-9  # Joules/cycle
+MU = 1.2e-9     # Joules/byte
+CI_INDIA = 710  # mgCO2/kWh
+WUE = 1.8       # ml/Wh (Water Usage Effectiveness)
 
 API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 class CodePayload(BaseModel):
     code: str
@@ -35,32 +36,24 @@ async def analyze_code(payload: CodePayload):
     try:
         response = model.generate_content(prompt)
         match = re.search(r"\{.*\}", response.text, re.DOTALL)
+        if not match: raise ValueError("No JSON found")
+        
         data = json.loads(match.group())
-        
-        T = float(data.get("T", 5000))
-        S = float(data.get("S", 256))
+        T, S = float(data.get("T", 5000)), float(data.get("S", 256))
 
-        # --- DERIVED VALUES (NO HALLUCINATION) ---
-        # 1. Energy in Joules
+        # --- Physical Derivations ---
         energy_j = (KAPPA * T) + (MU * S)
+        # 1 Joule = 0.000277778 Watt-hours
+        energy_wh = energy_j * 0.000277778
         
-        # 2. Water in milliliters (ml)
-        # Energy J -> kWh (1 J = 2.777e-7 kWh)
-        energy_kwh = energy_j / 3600000
-        water_ml = (energy_kwh * WUE) * 1000
-        
-        # 3. Carbon in milligrams (mg)
-        carbon_mg = (energy_kwh * CI_INDIA) * 1000000
-
-        # Rating Logic based on Energy Threshold
-        rating = "A+ (Efficient)" if energy_j < 0.00005 else "D (Resource Heavy)"
+        water_ml = energy_wh * WUE
+        carbon_mg = (energy_wh / 1000) * CI_INDIA
 
         return {
             "energy_joules": energy_j,
             "water_ml": water_ml,
             "carbon_mg": carbon_mg,
-            "rating": rating,
-            "metrics": {"cycles": T, "memory": S}
+            "rating": "A+ (Efficient)" if energy_j < 0.00005 else "D (Resource Heavy)"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
