@@ -2,13 +2,14 @@ import os
 import re
 import json
 import google.generativeai as genai
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI()
 
-# ✅ FIX: CORS Policy
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,42 +19,119 @@ app.add_middleware(
 )
 
 # Physics Constants
-KAPPA = 0.8e-9  # Joules/cycle
-MU = 1.2e-9     # Joules/byte
-CI_INDIA = 710  # mgCO2/kWh
-WUE = 1.8       # ml/Wh (Water Usage Effectiveness)
+KAPPA = 0.8e-9
+MU = 1.2e-9
+CI_INDIA = 710
+WUE = 1.8
 
 API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=API_KEY)
+
+# TEMPORARY MODEL CHANGE
 model = genai.GenerativeModel("gemma-3-4b-it")
+
 
 class CodePayload(BaseModel):
     code: str
 
+
+def safe_float(value, default):
+    try:
+        if isinstance(value, (int, float)):
+            return float(value)
+
+        match = re.search(r"\d+(\.\d+)?", str(value))
+
+        if match:
+            return float(match.group())
+
+        return default
+
+    except Exception:
+        return default
+
+
+@app.get("/")
+def health_check():
+    return {
+        "status": "online",
+        "model": "gemma-3-4b-it"
+    }
+
+
 @app.post("/analyze")
 async def analyze_code(payload: CodePayload):
-    prompt = f"Analyze code complexity. Return ONLY JSON with 'T' (cycles n=1000) and 'S' (memory bytes). CODE: {payload.code}"
+    prompt = f"""
+Analyze the following Python code for computational complexity.
+
+Return ONLY valid JSON in this exact format:
+{{
+    "T": numeric cycles,
+    "S": numeric memory bytes
+}}
+
+Do not return explanation.
+Do not return markdown.
+
+CODE:
+{payload.code}
+"""
+
     try:
         response = model.generate_content(prompt)
-        match = re.search(r"\{.*\}", response.text, re.DOTALL)
-        if not match: raise ValueError("No JSON found")
-        
-        data = json.loads(match.group())
-        T, S = float(data.get("T", 5000)), float(data.get("S", 256))
 
-        # --- Physical Derivations ---
+        print("RAW MODEL RESPONSE:", response.text)
+
+        match = re.search(
+            r"\{[\s\S]*\}",
+            response.text
+        )
+
+        if not match:
+            raise ValueError(
+                f"No JSON found in response: {response.text}"
+            )
+
+        data = json.loads(match.group())
+
+        T = safe_float(data.get("T"), 5000)
+        S = safe_float(data.get("S"), 256)
+
+        # Physics calculations
         energy_j = (KAPPA * T) + (MU * S)
-        # 1 Joule = 0.000277778 Watt-hours
+
         energy_wh = energy_j * 0.000277778
-        
+
         water_ml = energy_wh * WUE
         carbon_mg = (energy_wh / 1000) * CI_INDIA
 
+        # Better rating logic
+        if energy_j < 0.001:
+            rating = "A+ (Efficient)"
+        elif energy_j < 0.01:
+            rating = "B (Moderate)"
+        else:
+            rating = "D (Resource Heavy)"
+
         return {
-            "energy_joules": energy_j,
-            "water_ml": water_ml,
-            "carbon_mg": carbon_mg,
-            "rating": "A+ (Efficient)" if energy_j < 0.00005 else "D (Resource Heavy)"
+            "energy_joules": round(energy_j, 8),
+            "water_ml": round(water_ml, 8),
+            "carbon_mg": round(carbon_mg, 8),
+            "rating": rating,
+            "raw_T": T,
+            "raw_S": S
         }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+
+        if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
+            raise HTTPException(
+                status_code=429,
+                detail="Model quota exhausted"
+            )
+
+        raise HTTPException(
+            status_code=500,
+            detail=error_msg
+        )
