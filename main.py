@@ -19,15 +19,15 @@ app.add_middleware(
 )
 
 # Physics Constants
-KAPPA = 0.8e-9
-MU = 1.2e-9
-CI_INDIA = 710
-WUE = 1.8
+KAPPA = 0.8e-9      # Joules per cycle
+MU = 1.2e-9         # Joules per byte
+CI_INDIA = 710      # mgCO2 / kWh
+WUE = 1.8           # ml / Wh
 
 API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=API_KEY)
 
-# TEMPORARY MODEL CHANGE
+# MODEL
 model = genai.GenerativeModel("gemma-3-4b-it")
 
 
@@ -40,7 +40,10 @@ def safe_float(value, default):
         if isinstance(value, (int, float)):
             return float(value)
 
-        match = re.search(r"\d+(\.\d+)?", str(value))
+        match = re.search(
+            r"\d+(\.\d+)?",
+            str(value)
+        )
 
         if match:
             return float(match.group())
@@ -62,16 +65,25 @@ def health_check():
 @app.post("/analyze")
 async def analyze_code(payload: CodePayload):
     prompt = f"""
-Analyze the following Python code for computational complexity.
+You are an expert code complexity analyzer.
+
+Analyze the following Python code and estimate:
+
+1. T = approximate computational cycles for n = 1000
+2. S = approximate memory usage in bytes
+
+IMPORTANT RULES:
+- Single loop => T between 1000 and 10000
+- Nested loop => T between 100000 and 1000000
+- sorted() => around 10000
+- Never return zero
+- Use realistic positive integer values
 
 Return ONLY valid JSON in this exact format:
 {{
-    "T": numeric cycles,
-    "S": numeric memory bytes
+    "T": number,
+    "S": number
 }}
-
-Do not return explanation.
-Do not return markdown.
 
 CODE:
 {payload.code}
@@ -89,13 +101,17 @@ CODE:
 
         if not match:
             raise ValueError(
-                f"No JSON found in response: {response.text}"
+                f"No JSON found: {response.text}"
             )
 
         data = json.loads(match.group())
 
         T = safe_float(data.get("T"), 5000)
         S = safe_float(data.get("S"), 256)
+
+        # Safety clamps
+        T = max(T, 100)
+        S = max(S, 64)
 
         # Physics calculations
         energy_j = (KAPPA * T) + (MU * S)
@@ -105,10 +121,10 @@ CODE:
         water_ml = energy_wh * WUE
         carbon_mg = (energy_wh / 1000) * CI_INDIA
 
-        # Better rating logic
-        if energy_j < 0.001:
+        # Better rating logic using T
+        if T < 10000:
             rating = "A+ (Efficient)"
-        elif energy_j < 0.01:
+        elif T < 100000:
             rating = "B (Moderate)"
         else:
             rating = "D (Resource Heavy)"
@@ -118,17 +134,17 @@ CODE:
             "water_ml": round(water_ml, 8),
             "carbon_mg": round(carbon_mg, 8),
             "rating": rating,
-            "raw_T": T,
-            "raw_S": S
+            "raw_T": int(T),
+            "raw_S": int(S)
         }
 
     except Exception as e:
         error_msg = str(e)
 
-        if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
+        if "RESOURCE_EXHAUSTED" in error_msg:
             raise HTTPException(
                 status_code=429,
-                detail="Model quota exhausted"
+                detail="Quota exhausted"
             )
 
         raise HTTPException(
