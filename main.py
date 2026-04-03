@@ -65,24 +65,25 @@ def health_check():
 @app.post("/analyze")
 async def analyze_code(payload: CodePayload):
     prompt = f"""
-You are an expert code complexity analyzer.
+You are an expert static code complexity analyzer.
 
-Analyze the following Python code and estimate:
+Estimate the computational complexity score for Python code.
 
-1. T = approximate computational cycles for n = 1000
-2. S = approximate memory usage in bytes
+Use n = 1000.
 
-IMPORTANT RULES:
-- Single loop => T between 1000 and 10000
-- Nested loop => T between 100000 and 1000000
-- sorted() => around 10000
-- Never return zero
-- Use realistic positive integer values
+VERY IMPORTANT RULES:
+1. Code with sorted() = around 10000 cycles
+2. Single loop = around 10000 cycles
+3. Nested double loop = around 1000000 cycles
+4. Triple nested loop = around 10000000 cycles
+5. More loops means exponentially higher cycles
+6. NEVER assign similar values to single and nested loops
+7. Nested loops must be at least 50x higher than sorted()
 
-Return ONLY valid JSON in this exact format:
+Return ONLY valid JSON:
 {{
-    "T": number,
-    "S": number
+    "T": integer,
+    "S": integer
 }}
 
 CODE:
