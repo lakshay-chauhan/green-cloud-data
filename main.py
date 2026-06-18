@@ -28,7 +28,7 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=API_KEY)
 
 # MODEL
-model = genai.GenerativeModel("gemma-3-4b-it")
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 
 class CodePayload(BaseModel):
